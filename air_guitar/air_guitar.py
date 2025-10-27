@@ -10,9 +10,9 @@ mp_pose = mp.solutions.pose
 pose = mp_pose.Pose()
 
 # 기타 이미지 불러오기 (배경이 투명한 PNG 파일)
-try:
+try :
     # cv2.IMREAD_UNCHANGED (-1) 플래그는 알파 채널(투명도)까지 포함하여 4채널로 불러옴
-    guitar_img = cv2.imread('3.png', -1)
+    guitar_img = cv2.imread('3.png', cv2.IMREAD_UNCHANGED)
     
     # 파일이 존재하지 않거나 읽을 수 없으면 guitar_img는 None이 됨
     if guitar_img is None:
@@ -22,17 +22,20 @@ try:
     if guitar_img.shape[2] != 4:
         print(f"오류: '3.png' 파일에 알파 채널(투명도)이 없습니다.")
         print("배경이 투명한 4채널 PNG 파일을 사용하세요.")
-        exit()
+        exit() 
 
+    opacity = 160
+    guitar_img[:, :, 3] = (guitar_img[:, :, 3].astype(np.float32) * (opacity/255.0)).astype(np.uint8)
+    
     # 기타 이미지 좌우 반전
     guitar_img = cv2.flip(guitar_img, 1)
-
+    
 except FileNotFoundError:
     # try 블록에서 FileNotFoundError가 발생하거나 guitar_img가 None일 때 실행됨
     print("오류: '3.png' 파일을 찾을 수 없습니다.")
     print("스크립트와 동일한 폴더에 파일이 있는지 확인하세요.")
     exit()
-
+    
 # 웹캠 열기 (0번 카메라)
 cap = cv2.VideoCapture(0)
 
@@ -100,7 +103,6 @@ while cap.isOpened():
             base_angle = math.degrees(math.atan2(right_shoulder_px[1] - left_shoulder_px[1], 
                                                  right_shoulder_px[0] - left_shoulder_px[0]))
             
-          
             # 60도를 더해 기타의 기본 기울기를 설정
             final_angle = -base_angle + 60
           
