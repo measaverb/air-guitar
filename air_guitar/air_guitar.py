@@ -24,7 +24,8 @@ try :
         print("배경이 투명한 4채널 PNG 파일을 사용하세요.")
         exit() 
 
-    opacity = 160
+    # 투명도 설정 (0~255)
+    opacity = 160 # 160으로 지정
     guitar_img[:, :, 3] = (guitar_img[:, :, 3].astype(np.float32) * (opacity/255.0)).astype(np.uint8)
     
     # 기타 이미지 좌우 반전
