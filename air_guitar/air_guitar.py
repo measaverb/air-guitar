@@ -1,7 +1,9 @@
+import time
 import cv2
 import mediapipe as mp
 import numpy as np
 import math
+
 
 # --- 1. 초기 설정 ---
 # MediaPipe Pose 모델 초기화
@@ -10,9 +12,9 @@ mp_pose = mp.solutions.pose
 pose = mp_pose.Pose()
 
 # 기타 이미지 불러오기 (배경이 투명한 PNG 파일)
-try :
+try:
     # cv2.IMREAD_UNCHANGED (-1) 플래그는 알파 채널(투명도)까지 포함하여 4채널로 불러옴
-    guitar_img = cv2.imread('3.png', cv2.IMREAD_UNCHANGED)
+    guitar_img = cv2.imread('3.png', -1)
     
     # 파일이 존재하지 않거나 읽을 수 없으면 guitar_img는 None이 됨
     if guitar_img is None:
@@ -22,23 +24,28 @@ try :
     if guitar_img.shape[2] != 4:
         print(f"오류: '3.png' 파일에 알파 채널(투명도)이 없습니다.")
         print("배경이 투명한 4채널 PNG 파일을 사용하세요.")
-        exit() 
-
+        exit()
+        
     # 투명도 설정 (0~255)
     opacity = 160 # 160으로 지정
     guitar_img[:, :, 3] = (guitar_img[:, :, 3].astype(np.float32) * (opacity/255.0)).astype(np.uint8)
-    
+
     # 기타 이미지 좌우 반전
     guitar_img = cv2.flip(guitar_img, 1)
     
+
 except FileNotFoundError:
     # try 블록에서 FileNotFoundError가 발생하거나 guitar_img가 None일 때 실행됨
     print("오류: '3.png' 파일을 찾을 수 없습니다.")
     print("스크립트와 동일한 폴더에 파일이 있는지 확인하세요.")
     exit()
-    
+
 # 웹캠 열기 (0번 카메라)
 cap = cv2.VideoCapture(0)
+
+# 🎥 저장
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+out = cv2.VideoWriter('airguitar_output.mp4', fourcc, 30.0, (int(cap.get(3)), int(cap.get(4))))
 
 # --- 2. 메인 루프 ---
 # cap.isOpened()가 True인 동안 (카메라가 정상 연결된 동안) 무한 반복
@@ -104,6 +111,7 @@ while cap.isOpened():
             base_angle = math.degrees(math.atan2(right_shoulder_px[1] - left_shoulder_px[1], 
                                                  right_shoulder_px[0] - left_shoulder_px[0]))
             
+          
             # 60도를 더해 기타의 기본 기울기를 설정
             final_angle = -base_angle + 60
           
@@ -165,6 +173,87 @@ while cap.isOpened():
                     # 붙여넣을 이미지 = (알파 * 기타) + (역알파 * 원본배경)
                     image[y1_c:y2_c, x1_c:x2_c, c] = (alpha_s * rotated_guitar[overlay_y1:overlay_y2, overlay_x1:overlay_x2, c] +
                                                       alpha_l * image[y1_c:y2_c, x1_c:x2_c, c])
+                    
+            # +) 스트러밍 포인트 하이라이트
+            if 'guitar_center_x' in locals() and 'guitar_center_y' in locals():
+                # 하이라이트 직사각형 크기 (기타 전체 중 일부)
+                # shoulder_width 기준으로 적당히 비율 조절
+                highlight_w = int(shoulder_width * 0.9)   # 가로 폭
+                highlight_h = int(shoulder_width * 0.4)   # 세로 폭 (좁게)
+                
+                # 기타 중심을 기준으로 하이라이트 위치 설정
+                # 중심보다 약간 아래(몸통 부분)로 내림
+                hl_center_x = guitar_center_x - int(shoulder_width * 0.25)
+                hl_center_y = guitar_center_y + int(shoulder_width * 0.25)
+
+                # 좌상단 / 우하단 좌표 계산
+                hl_x1 = hl_center_x - highlight_w // 2
+                hl_x2 = hl_center_x + highlight_w // 2
+                hl_y1 = hl_center_y - highlight_h // 2
+                hl_y2 = hl_center_y + highlight_h // 2
+
+                # 화면 범위 안으로 제한
+                hl_x1 = max(0, hl_x1); hl_x2 = min(w-1, hl_x2)
+                hl_y1 = max(0, hl_y1); hl_y2 = min(h-1, hl_y2)
+
+                # 반투명 스트러밍 지점 오버레이
+                overlay = image.copy()
+                cv2.rectangle(overlay, (hl_x1, hl_y1), (hl_x2, hl_y2), (0, 255, 0), -1)
+                alpha = 0.3 
+                cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
+
+                # 테두리 및 텍스트 표시
+                cv2.rectangle(image, (hl_x1, hl_y1), (hl_x2, hl_y2), (0, 220, 0), 2, cv2.LINE_AA)
+                cv2.putText(image, "ACTIVE ZONE", (hl_x1+10, hl_y1-10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2, cv2.LINE_AA)
+            
+            # --- 6b. 오른손 손끝 추적 및 속도 기반 소리 트리거 ---
+            if results.pose_landmarks:
+                landmarks = results.pose_landmarks.landmark
+                right_wrist = landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value]
+                right_index = landmarks[mp_pose.PoseLandmark.RIGHT_INDEX.value]
+
+                if all(lm.visibility > 0.5 for lm in [right_wrist, right_index]):
+                    # 픽셀 좌표로 변환
+                    wrist_px = (int(right_wrist.x * w), int(right_wrist.y * h))
+                    index_px = (int(right_index.x * w), int(right_index.y * h))
+
+                    # 손끝 좌표 계산 (손목~검지 방향)
+                    fingertip = (
+                        int((wrist_px[0] + index_px[0]) / 2),
+                        int((wrist_px[1] + index_px[1]) / 2)
+                    )
+
+                    # 속도 계산 (이전 프레임과 비교)
+                    if 'prev_tip' not in locals():
+                        prev_tip = fingertip
+                        prev_time = time.time()
+                        velocity = 0
+                    else:
+                        now = time.time()
+                        dt = now - prev_time
+                        dist_px = math.hypot(fingertip[0]-prev_tip[0], fingertip[1]-prev_tip[1])
+                        velocity = dist_px / dt if dt > 0 else 0
+                        prev_tip = fingertip
+                        prev_time = now
+
+                    # 손끝 표시
+                    cv2.circle(image, fingertip, 6, (0, 255, 255), -1)
+                    cv2.putText(image, f"speed:{velocity:.0f}", (fingertip[0]+10, fingertip[1]-10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
+
+                    # === rule based: 특정 영역 + 특정 속도 ===
+                    # (예: 기타 중심 기준 직사각형 안쪽)
+                    if 'guitar_center_x' in locals() and 'guitar_center_y' in locals():
+                        rect_half_w = shoulder_width * 1.2
+                        rect_half_h = shoulder_width * 0.4
+                        if (abs(fingertip[0] - guitar_center_x) < rect_half_w and
+                            abs(fingertip[1] - guitar_center_y) < rect_half_h):
+                            if velocity > 900:  # px/s 임계값, 환경에 따라 조정
+                                cv2.putText(image, "STRUM!", (guitar_center_x-40, guitar_center_y-60),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,255), 3)
+                                # 소리 재생 대신 텍스트
+                                cv2.putText(image, "STRUM!", (hl_x1 + 20, hl_y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3, cv2.LINE_AA)
 
     # --- 7. 결과 표시 및 종료 ---
     # 'Virtual Guitar'라는 이름의 창에 최종 이미지를 표시
@@ -178,5 +267,6 @@ while cap.isOpened():
 # --- 8. 자원 해제 ---
 # 웹캠 사용 해제
 cap.release()
+out.release()  # 저장
 # 모든 OpenCV 창 닫기
 cv2.destroyAllWindows()
