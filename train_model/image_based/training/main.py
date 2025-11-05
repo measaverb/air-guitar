@@ -6,6 +6,28 @@ from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 from utils import plot_confusion_matrix, plot_logs, set_seed
 
+## AlexNet Result
+#               precision    recall  f1-score   support
+
+#            C       1.00      0.94      0.97        18
+#            D       0.92      0.92      0.92        13
+#            G       0.95      1.00      0.98        20
+
+#     accuracy                           0.96        51
+#    macro avg       0.96      0.96      0.96        51
+# weighted avg       0.96      0.96      0.96        51
+
+## ResNet18 Result
+#               precision    recall  f1-score   support
+
+#            C       0.70      0.39      0.50        18
+#            D       0.52      0.85      0.65        13
+#            G       0.85      0.85      0.85        20
+
+#     accuracy                           0.69        51
+#    macro avg       0.69      0.70      0.67        51
+# weighted avg       0.71      0.69      0.67        51
+
 CONFIG = {
     "seed": 42,
     "data_root": "data/processed",
