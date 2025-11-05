@@ -1,5 +1,6 @@
-import cv2
 import os
+
+import cv2
 
 # === 설정 ===
 base_dir = "dataset"
@@ -36,7 +37,7 @@ while True:
     cv2.imshow("Create Dataset - Press C / D / G", frame)
 
     key = cv2.waitKey(1) & 0xFF
-    if key == ord('q'):  # q 누르면 종료
+    if key == ord("q"):  # q 누르면 종료
         break
 
     for chord in chords:
