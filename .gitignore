@@ -232,3 +232,8 @@ __marimo__/
 .trunk/
 
 train_model/dataset/raw_images/
+train_model/image_based/data/processed
+train_model/image_based/data/raw
+
+.DS_Store
+train_model/.DS_Store
