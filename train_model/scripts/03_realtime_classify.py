@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import argparse, json, time
+import argparse
+import json
+import time
 from collections import deque
 
 import cv2
+import mediapipe as mp
 import numpy as np
 from joblib import load
-import mediapipe as mp
+
 
 # ---- 전처리: 훈련과 동일 ----
 def extract_feature_from_result(res, mirror_left=True, use_z=False):
@@ -46,12 +49,15 @@ def extract_feature_from_result(res, mirror_left=True, use_z=False):
     feats = np.concatenate([xs, ys]) if not use_z else np.concatenate([xs, ys, zs])
     return feats
 
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="artifacts/mlp.joblib")
     ap.add_argument("--labels", default="artifacts/labels.json")
     ap.add_argument("--camera", type=int, default=0)
-    ap.add_argument("--use_z", action="store_true", help="훈련을 z 포함으로 했을 때만 켜세요")
+    ap.add_argument(
+        "--use_z", action="store_true", help="훈련을 z 포함으로 했을 때만 켜세요"
+    )
     ap.add_argument("--smooth", type=int, default=8, help="최근 N프레임 확률 이동평균")
     ap.add_argument("--min_det_conf", type=float, default=0.5)
     ap.add_argument("--min_track_conf", type=float, default=0.5)
@@ -71,8 +77,8 @@ def main():
 
     hands = mp_hands.Hands(
         static_image_mode=False,
-        max_num_hands=1,          # 한 손만
-        model_complexity=0,       # 속도↑
+        max_num_hands=1,  # 한 손만
+        model_complexity=0,  # 속도↑
         min_detection_confidence=args.min_det_conf,
         min_tracking_confidence=args.min_track_conf,
     )
@@ -102,7 +108,9 @@ def main():
             text = "No hand"
             color = (64, 64, 64)
             if res.multi_hand_landmarks:
-                feats = extract_feature_from_result(res, mirror_left=True, use_z=args.use_z)
+                feats = extract_feature_from_result(
+                    res, mirror_left=True, use_z=args.use_z
+                )
                 if feats is not None:
                     feats = feats.reshape(1, -1)
                     proba = pipe.predict_proba(feats)[0]
@@ -131,18 +139,37 @@ def main():
 
             # 오버레이
             cv2.rectangle(frame_bgr, (10, 10), (310, 80), (0, 0, 0), -1)
-            cv2.putText(frame_bgr, text, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2, cv2.LINE_AA)
-            cv2.putText(frame_bgr, f"FPS:{fps:.1f}", (220, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1, cv2.LINE_AA)
+            cv2.putText(
+                frame_bgr,
+                text,
+                (20, 50),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame_bgr,
+                f"FPS:{fps:.1f}",
+                (220, 75),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (200, 200, 200),
+                1,
+                cv2.LINE_AA,
+            )
 
             cv2.imshow("Hand Chord Classifier (q to quit)", frame_bgr)
             k = cv2.waitKey(1) & 0xFF
-            if k == ord('q'):
+            if k == ord("q"):
                 break
 
     finally:
         cap.release()
         cv2.destroyAllWindows()
         hands.close()
+
 
 if __name__ == "__main__":
     main()
