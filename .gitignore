@@ -237,3 +237,4 @@ train_model/image_based/data/raw
 
 .DS_Store
 train_model/.DS_Store
+*.pth
