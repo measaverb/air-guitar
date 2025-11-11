@@ -160,7 +160,7 @@ class StrumDetector:
             velocity_y = index_tip_y_px - self.prev_y
             
             if velocity_y > stroke_threshold:
-                # stroke_text = "Downstroke!" # 텍스트 비활성화 (이전 요청)
+                stroke_text = "Downstroke!"
                 stroke_detected = True
                 self.last_stroke_time = current_time
         
@@ -189,9 +189,11 @@ class GuitarRenderer:
             if self.guitar_img_original.shape[2] != 4:
                 raise ValueError("기타 이미지는 알파 채널(투명도)이 있는 4채널 PNG여야 합니다.")
                 
-            opacity = 160
-            alpha_channel = self.guitar_img_original[:, :, 3].astype(np.float32) * (opacity/255.0)
-            self.guitar_img_original[:, :, 3] = alpha_channel.astype(np.uint8)
+            # --- [수정] ---
+            # 초기화 시 투명도를 고정하지 않고 원본 알파 채널 유지
+            # opacity = 160
+            # alpha_channel = self.guitar_img_original[:, :, 3].astype(np.float32) * (opacity/255.0)
+            # self.guitar_img_original[:, :, 3] = alpha_channel.astype(np.uint8)
             
             self.guitar_img_original = cv2.flip(self.guitar_img_original, 1)
             print("기타 이미지 로드 성공.")
@@ -206,7 +208,8 @@ class GuitarRenderer:
         """Pose 모델을 실행합니다."""
         return self.pose.process(image_rgb)
 
-    def draw_overlay(self, image, pose_results):
+    # [수정] current_opacity 인자 추가
+    def draw_overlay(self, image, pose_results, current_opacity):
         """
         Pose 결과에 따라 기타 이미지를 그립니다.
         """
@@ -217,6 +220,7 @@ class GuitarRenderer:
         
         if pose_results.pose_landmarks:
             landmarks = pose_results.pose_landmarks.landmark
+            
             left_shoulder = landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value]
             right_shoulder = landmarks[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER.value]
 
@@ -246,11 +250,11 @@ class GuitarRenderer:
                         M = cv2.getRotationMatrix2D((guitar_width / 2, resized_height / 2), final_angle, 1)
                         rotated_guitar = cv2.warpAffine(resized_guitar, M, (guitar_width, resized_height))
 
-                        self._alpha_blend(image, rotated_guitar, guitar_center_x, guitar_center_y)
+                        # [수정] current_opacity 인자 전달
+                        self._alpha_blend(image, rotated_guitar, guitar_center_x, guitar_center_y, current_opacity)
 
-                # 초록색 'ACTIVE ZONE' 박스 그리기 비활성화 (이전 요청)
-
-    def _alpha_blend(self, background, overlay, center_x, center_y):
+    # [수정] current_opacity 인자 추가
+    def _alpha_blend(self, background, overlay, center_x, center_y, current_opacity):
         """
         알파 채널을 사용해 이미지를 오버레이합니다. (Helper method)
         """
@@ -272,7 +276,11 @@ class GuitarRenderer:
         if overlay_y2 <= overlay_y1 or overlay_x2 <= overlay_x1:
             return
 
-        alpha_s = overlay[overlay_y1:overlay_y2, overlay_x1:overlay_x2, 3] / 255.0
+        # [수정] 슬라이더의 투명도 값을 (0-1) 스케일로 변환
+        user_alpha_scale = current_opacity / 255.0
+
+        # [수정] 이미지 자체의 알파 채널과 사용자의 투명도 설정을 모두 곱함
+        alpha_s = (overlay[overlay_y1:overlay_y2, overlay_x1:overlay_x2, 3] / 255.0) * user_alpha_scale
         alpha_l = 1.0 - alpha_s
 
         roi = background[y1_c:y2_c, x1_c:x2_c]
@@ -302,7 +310,6 @@ class AirGuitarApp:
             raise IOError(f"카메라 {args.camera}를 열 수 없습니다.")
         
         cv2.namedWindow(self.WINDOW_NAME)
-        cv2.createTrackbar('Sensitivity', self.WINDOW_NAME, 30, 100, lambda x: None)
 
         try:
             with open(args.labels, "r") as f:
@@ -337,17 +344,37 @@ class AirGuitarApp:
         self.mp_drawing_styles = mp.solutions.drawing_styles
         self.mp_hands = mp.solutions.hands
 
-        # --- [수정] 랜드마크 표시 토글 상태 ---
-        self.show_landmarks = False # 'm' 키로 토글 (기본값: 꺼짐)
-        print("--- Air Guitar 실행 (종료: q, 마커 토글: m) ---")
+        # --- [수정] 토글 상태 변수들 (기본값: 모두 켜기) ---
+        self.show_all_visuals = True  # 'a' (마스터 토글)
+        self.show_sensitivity_ui = True # 's' (트랙바, 민감도 텍스트)
+        self.show_opacity_slider = True # 'e' (투명도 트랙바) [신규]
+        self.show_markers = True      # 'm' (손 마커)
+        self.show_guitar = True       # 'g' (기타 이미지)
+        self.show_chord_text = True   # 'c' (코드 텍스트)
+        self.show_stroke_text = True  # 't' (스트로크 텍스트)
+        
+        self.current_sensitivity = 30 # 기본값
+        self.current_opacity = 160    # 기본값 [신규]
 
+        # [수정] 도움말 업데이트
+        print("--- Air Guitar 실행 (종료: q, 전체: a, 민감도: s, 마커: m, 투명도: e, 스트로크: t, 기타: g, 코드: c) ---")
+
+        # [수정] 기본값이 켜기이므로, 트랙바를 처음부터 생성
+        cv2.createTrackbar('Sensitivity', self.WINDOW_NAME, self.current_sensitivity, 100, self._on_sensitivity_change)
+        cv2.createTrackbar('Opacity', self.WINDOW_NAME, self.current_opacity, 255, self._on_opacity_change) # [신규]
+
+    def _on_sensitivity_change(self, val):
+        """트랙바 콜백: 현재 민감도 값을 업데이트합니다."""
+        self.current_sensitivity = val
+
+    # [신규] 투명도 트랙바 콜백
+    def _on_opacity_change(self, val):
+        """트랙바 콜백: 현재 투명도 값을 업데이트합니다."""
+        self.current_opacity = val
 
     def get_sensitivity(self):
-        """트랙바에서 현재 민감도 값을 가져옵니다."""
-        try:
-            return cv2.getTrackbarPos('Sensitivity', self.WINDOW_NAME)
-        except cv2.error:
-            return 30
+        """저장된 민감도 값을 반환합니다."""
+        return self.current_sensitivity
 
     def run(self):
         """메인 애플리케이션 루프를 실행합니다."""
@@ -357,7 +384,7 @@ class AirGuitarApp:
                 print("카메라 프레임 읽기 실패.")
                 break
                 
-            # image = cv2.flip(image, 1) # 비-거울 모드 (이전 요청)
+            # image = cv2.flip(image, 1) # 비-거울 모드
             h, w, _ = image.shape
 
             image.flags.writeable = False
@@ -369,7 +396,9 @@ class AirGuitarApp:
             image.flags.writeable = True
             image = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
 
-            self.guitar_renderer.draw_overlay(image, pose_results)
+            # [수정] draw_overlay에 current_opacity 값 전달
+            if self.show_all_visuals and self.show_guitar:
+                self.guitar_renderer.draw_overlay(image, pose_results, self.current_opacity)
             
             chord, chord_text, stroke, stroke_text = self._process_hands(
                 image, hand_results
@@ -384,12 +413,55 @@ class AirGuitarApp:
             
             # --- [수정] 키보드 입력 처리 ---
             key = cv2.waitKey(5) & 0xFF
+            trackbar_state_changed = False
             
             if key == ord('q'):
                 break # 'q' (종료)
-            elif key == ord('m'):
-                self.show_landmarks = not self.show_landmarks # 'm' (마커 토글)
-                print(f"손 랜드마크 표시: {'ON' if self.show_landmarks else 'OFF'}")
+            
+            elif key == ord('a'): # 'a' (마스터 토글)
+                self.show_all_visuals = not self.show_all_visuals
+                trackbar_state_changed = True 
+                print(f"모든 시각 요소: {'ON' if self.show_all_visuals else 'OFF'}")
+
+            elif key == ord('s'): # 's' (민감도 UI 토글)
+                self.show_sensitivity_ui = not self.show_sensitivity_ui
+                trackbar_state_changed = True
+                print(f"민감도 UI: {'ON' if self.show_sensitivity_ui else 'OFF'}")
+
+            elif key == ord('m'): # 'm' (마커 토글)
+                self.show_markers = not self.show_markers
+                print(f"손 마커 표시: {'ON' if self.show_markers else 'OFF'}")
+
+            # [신규] 'e' 키로 투명도 슬라이더 토글
+            elif key == ord('e'):
+                self.show_opacity_slider = not self.show_opacity_slider
+                trackbar_state_changed = True
+                print(f"투명도 슬라이더: {'ON' if self.show_opacity_slider else 'OFF'}")
+
+            elif key == ord('t'): # 't' (스트로크 텍스트 토글)
+                self.show_stroke_text = not self.show_stroke_text
+                print(f"스트로크 텍스트 표시: {'ON' if self.show_stroke_text else 'OFF'}")
+
+            elif key == ord('g'): # 'g' (기타 토글)
+                self.show_guitar = not self.show_guitar
+                print(f"기타 이미지 표시: {'ON' if self.show_guitar else 'OFF'}")
+
+            elif key == ord('c'): # 'c' (코드 텍스트 토글)
+                self.show_chord_text = not self.show_chord_text
+                print(f"코드 텍스트 표시: {'ON' if self.show_chord_text else 'OFF'}")
+            
+            # [수정] 'a', 's', 'e' 키가 눌렸을 때만 창을 새로고침
+            if trackbar_state_changed:
+                cv2.destroyWindow(self.WINDOW_NAME)
+                cv2.namedWindow(self.WINDOW_NAME)
+                
+                # 민감도 트랙바 생성 로직
+                if self.show_all_visuals and self.show_sensitivity_ui:
+                    cv2.createTrackbar('Sensitivity', self.WINDOW_NAME, self.current_sensitivity, 100, self._on_sensitivity_change)
+                
+                # [신규] 투명도 트랙바 생성 로직
+                if self.show_all_visuals and self.show_opacity_slider:
+                    cv2.createTrackbar('Opacity', self.WINDOW_NAME, self.current_opacity, 255, self._on_opacity_change)
 
 
     def _process_hands(self, image, hand_results):
@@ -409,8 +481,8 @@ class AirGuitarApp:
         if hand_results.multi_hand_landmarks:
             for i, hand_landmarks in enumerate(hand_results.multi_hand_landmarks):
                 
-                # --- [수정] 'm' 키로 토글 가능한 손 랜드마크 그리기 ---
-                if self.show_landmarks:
+                # [수정] 마스터 토글('a')과 마커 토글('m') 모두 확인
+                if self.show_all_visuals and self.show_markers:
                     self.mp_drawing.draw_landmarks(
                         image,
                         hand_landmarks,
@@ -420,7 +492,6 @@ class AirGuitarApp:
                 
                 handedness_label = hand_results.multi_handedness[i].classification[0].label
 
-                # --- 수정된 손 역할 (비-거울 모드 기준) ---
                 if handedness_label == "Right": # 오른손(사용자 실제 손) -> 코드 잡기
                     chord_hand_detected = True
                     current_chord, chord_text = self.chord_classifier.classify(
@@ -444,16 +515,33 @@ class AirGuitarApp:
 
     def _draw_ui(self, image, chord_text, stroke_text):
         """화면에 텍스트 UI를 그립니다."""
+        
+        # 마스터 토글('a')이 꺼져있으면 아무것도 그리지 않음
+        if not self.show_all_visuals:
+            return
+
         h, w, _ = image.shape
+
+        # 's' 키로 토글
+        if self.show_sensitivity_ui:
+            cv2.putText(image, f'Sensitivity: {self.get_sensitivity()}', (10, 30), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
-        # 민감도
-        cv2.putText(image, f'Sensitivity: {self.get_sensitivity()}', (10, 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        # 코드
-        cv2.putText(image, chord_text, (10, 70), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (40, 180, 80), 2, cv2.LINE_AA)
+        # 'c' 키로 토글
+        if self.show_chord_text:
+            cv2.putText(image, chord_text, (10, 70), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (40, 180, 80), 2, cv2.LINE_AA)
         
-        # 스트로크 텍스트 비활성화 (이전 요청)
+        # 't' 키로 토글
+        if self.show_stroke_text and stroke_text:
+            stroke_ui_text = stroke_text
+            color = (0, 255, 0)
+            
+            (text_w, text_h), _ = cv2.getTextSize(stroke_ui_text, cv2.FONT_HERSHEY_SIMPLEX, 3, 5)
+            text_x = (w - text_w) // 2
+            text_y = (h + text_h) // 2
+            cv2.putText(image, stroke_ui_text, (text_x, text_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 3, color, 5, cv2.LINE_AA)
 
     def cleanup(self):
         """애플리케이션 종료 시 모든 리소스를 해제합니다."""
